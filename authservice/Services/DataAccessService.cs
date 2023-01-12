@@ -16,7 +16,6 @@ public interface IDataAccessService
     Task<User?> AddUser(User user);
     Task<User?> UpdateUser(User user);
     Task<bool> DeleteUser(Guid id);
-    Task<bool> DeleteForGDPR(Guid id);
     Task<List<User>> GetUsers();
     Task<List<User>> GetUsersWithRole(Roles[] roles);
     void SubscribeToGlobal();
@@ -34,19 +33,6 @@ public class DataAccessService : IDataAccessService
     public void SubscribeToGlobal()
     {
         _messagingService.Subscribe("auth", (BasicDeliverEventArgs ea, string queue, string request) => RouteCallback(ea, request), ExchangeType.Fanout, "*");
-        _messagingService.Subscribe("gdprexchange", (BasicDeliverEventArgs ea, string queue, string request) => GDPRCallback(ea, request), ExchangeType.Fanout, "*");
-    }
-
-    private static async void GDPRCallback(BasicDeliverEventArgs ea, string request)
-    {
-        string data = Encoding.UTF8.GetString(ea.Body.ToArray());
-        Guid id = JsonConvert.DeserializeObject<Guid>(data);
-
-        using AuthContext context = new();
-        User user = await context.User.SingleOrDefaultAsync(m => m.Id == id);
-        if (user == null) return;
-        context.User.Remove(user);
-        await context.SaveChangesAsync();
     }
 
     private static async void RouteCallback(BasicDeliverEventArgs ea, string request)
@@ -57,21 +43,6 @@ public class DataAccessService : IDataAccessService
 
         switch (request)
         {
-            case "adduser":
-                {
-                    var user = JsonConvert.DeserializeObject<User>(data);
-                    if (user == null)
-                        break;
-
-                    var existing = await context.User.SingleOrDefaultAsync(m => m.Email == user.Email);
-                    if (existing != null)
-                        break;
-
-                    context.Add(user);
-                    await context.SaveChangesAsync();
-
-                    break;
-                }
             case "deleteuser":
                 {
                     Guid id = Guid.Parse(data);
@@ -171,7 +142,8 @@ public class DataAccessService : IDataAccessService
         if (user == null)
             return null;
 
-        _messagingService.Publish("auth", "auth-messaging", "adduser", "adduser", Encoding.UTF8.GetBytes(response));
+        context.Add(user);
+        await context.SaveChangesAsync();
 
         return user;
     }
@@ -193,11 +165,19 @@ public class DataAccessService : IDataAccessService
 
     public async Task<bool> DeleteUser(Guid id)
     {
+        using AuthContext context = new();
         var response = await _messagingService.PublishAndRetrieve("auth-data", "deleteuser", Encoding.UTF8.GetBytes(id.ToString()));
         if (response == null)
             return false;
 
+        var user = await context.User.SingleOrDefaultAsync(m => m.Id == id);
+        if (user == null)
+            return false;
+
+        context.User.Remove(user);
+        await context.SaveChangesAsync();
         _messagingService.Publish("auth", "auth-messaging", "deleteuser", "deleteuser", Encoding.UTF8.GetBytes(id.ToString()));
+        _messagingService.Publish("gdprexchange", "", "gdpr", "", Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(id)));
 
         return true;
     }
@@ -248,12 +228,5 @@ public class DataAccessService : IDataAccessService
             gettingUser = null;
             throw new Exception(ex.Message);
         }
-    }
-
-    public async Task<bool> DeleteForGDPR(Guid id)
-    {
-        var json = JsonConvert.SerializeObject(id);
-        _messagingService.Publish("gdprexchange", "", "gdpr", "", Encoding.UTF8.GetBytes(json));
-        return true;
     }
 }

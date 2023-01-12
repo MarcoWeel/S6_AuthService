@@ -1,5 +1,6 @@
 ﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using System.Diagnostics;
 using System.Text;
 
 namespace authservice.Services;
@@ -72,7 +73,7 @@ public class MessagingService : IMessagingService
         IModel channel = CreateChannel(queue, exchange, ExchangeType.Topic, $"*.{_serviceGuid}.response");
         string consumeTag = "";
 
-        TaskCompletionSource<string> receivedMessage = new();
+        List<string> result = new();
 
         var callback = (BasicDeliverEventArgs ea, string _queue, string _request) =>
         {
@@ -84,7 +85,7 @@ public class MessagingService : IMessagingService
 
             channel.BasicAck(ea.DeliveryTag, false);
 
-            receivedMessage.SetResult(Encoding.UTF8.GetString(ea.Body.ToArray()));
+            result.Add(Encoding.UTF8.GetString(ea.Body.ToArray()));
 
             channel.BasicCancel(consumeTag);
             channel.Close();
@@ -94,14 +95,20 @@ public class MessagingService : IMessagingService
 
         Publish(channel, exchange, queue, route, request, message);
 
-        bool didReceive = await Task.WhenAny(receivedMessage.Task, Task.Delay(MESSAGE_TIMEOUT)) == receivedMessage.Task;
+        Stopwatch stopWatch = new();
+        stopWatch.Start();
+        while (result.Count == 0 && stopWatch.Elapsed.Seconds <= MESSAGE_TIMEOUT)
+        {
+        }
 
-        if (didReceive)
-            return receivedMessage.Task.Result;
+        if (result.Count == 0)
+        {
+            channel.BasicCancel(consumeTag);
+            channel.Close();
+            throw new Exception($"[{DateTime.Now:HH:mm:ss}] request timed out request: {request}, on exchange: {exchange}");
+        }
 
-        channel.BasicCancel(consumeTag);
-        channel.Close();
-        throw new Exception($"[{DateTime.Now:HH:mm:ss}] request timed out request: {request}, on exchange: {exchange}");
+        return result[0];
     }
 
     private static void Publish(IModel channel, string exchange, string queue, string route, string request, byte[] message)
@@ -149,7 +156,7 @@ public class MessagingService : IMessagingService
     {
         Dictionary<string, object> args = new()
         {
-            { "x-expires", 3000 }
+            { "x-expires", 10000 }
         };
 
         IModel channel = _connection.CreateModel();

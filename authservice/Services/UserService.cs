@@ -98,8 +98,6 @@ public class UserService : IUserService
 
         await _dataAccessService.DeleteUser(id);
 
-        await _dataAccessService.DeleteForGDPR(id);
-
         return new DeleteResponse(user);
     }
 
