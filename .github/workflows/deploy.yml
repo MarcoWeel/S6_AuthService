@@ -1,0 +1,35 @@
+name: Docker Build and Push Image and Deploy
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build the Docker image
+      run: docker build -t marcoweel/auth:latest .
+    - name: Login to registry
+      run: docker login registry.wildradar.me -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+    - name: Push the Docker image
+      run: docker push marcoweel/auth
+  
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions-hub/kubectl@master
+      env:
+        KUBE_HOST: ${{ secrets.KUBE_HOST }}
+        KUBE_CERTIFICATE: ${{ secrets.KUBE_CERTIFICATE }}
+        KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+      with:
+        args: rollout restart deployment auth-app
+    - name: deploy
+      run: echo "deploying started"
